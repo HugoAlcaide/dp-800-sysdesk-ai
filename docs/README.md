@@ -5,7 +5,7 @@
 **Autor:** Hugo Alcaide Martínez  
 **Entorno Tecnológico:** Microsoft SQL Server 2025 (Compatibilidad 170) | SSMS 22 | Modelos Locales de Inteligencia Artificial (Ollama)  
 **Fecha:** Octubre 2026  
-**Documento PDF Asociado:** [`docs/SysDesk_AI_Propuesta_Tecnica_DP-800.pdf`](SysDesk_AI_Propuesta_Tecnica_DP800.pdf)
+**Documento PDF Asociado:** [`docs/SysDesk_AI_Propuesta_Tecnica_DP800.pdf`](SysDesk_AI_Propuesta_Tecnica_DP800.pdf)
 
 ---
 
