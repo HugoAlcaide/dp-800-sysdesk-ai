@@ -1,3 +1,10 @@
+/* =========================================================================
+   DESCRIPCIÓN: Inicialización y configuración del entorno SQL Server 2025:
+                1. Recreación limpia de la base de datos [SysDeskAI].
+                2. Configuración del nivel de compatibilidad 170 (SQL Server 2025).
+                3. Habilitación de PREVIEW_FEATURES para soporte de índices DiskANN.
+                4. Verificación de metadatos de estado y compatibilidad en sys.databases.
+   ========================================================================= */
 USE master;
 GO
 

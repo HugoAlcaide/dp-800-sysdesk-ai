@@ -1,6 +1,4 @@
 /* =========================================================================
-   PROYECTO: SysDesk AI (Microsoft DP-800)
-   SCRIPT: 06_security.sql
    DESCRIPCIÓN: Implementación del Bloque C — Seguridad en SQL Server 2025:
                 1. Roles personalizados y Principio de Mínimo Privilegio (GRANT/DENY).
                 2. Usuarios contenidos de prueba (WITHOUT LOGIN) mapeados a dbo.usuarios.

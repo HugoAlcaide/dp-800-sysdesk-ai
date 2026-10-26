@@ -1,3 +1,9 @@
+/* =========================================================================
+   DESCRIPCIÓN: Objetos de programación para control operativo y cumplimiento SLA:
+                1. Función escalar dbo.fn_CalcularHorasResolucion para cómputo de tiempos.
+                2. Vista analítica dbo.vw_panel_operativo_sla con evaluación de estado SLA.
+                3. Trigger AFTER UPDATE dbo.trg_tickets_SellarResolucion para sellado temporal.
+   ========================================================================= */
 USE [SysDeskAI];
 GO
 

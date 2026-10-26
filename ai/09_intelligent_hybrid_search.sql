@@ -1,6 +1,4 @@
 /* =========================================================================
-   PROYECTO: SysDesk AI (Microsoft DP-800)
-   SCRIPT: ai/09_intelligent_hybrid_search.sql
    DESCRIPCIÓN: Implementación del Bloque F — Búsqueda Inteligente en SQL 2025:
                 1. Creación de Catálogo e Índice Full-Text sobre dbo.kb_articulos.
                 2. Búsqueda Léxica (FREETEXTTABLE / CONTAINSTABLE).

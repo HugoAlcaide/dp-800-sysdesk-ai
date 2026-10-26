@@ -1,3 +1,11 @@
+/* =========================================================================
+   DESCRIPCIÓN: Diseño y creación del modelo relacional, JSON y vectorial (DDL):
+                1. Tabla dbo.usuarios: Catálogo de personal, roles y departamentos.
+                2. Tabla dbo.sistemas: Inventario de activos TI, criticidad y objetivos SLA.
+                3. Tabla dbo.kb_articulos: Base de conocimiento con columna nativa VECTOR(384).
+                4. Tabla dbo.tickets: Registro transaccional con telemetría nativa JSON.
+                5. Tabla dbo.auditoria_rag: Trazabilidad y observabilidad de consultas IA.
+   ========================================================================= */
 USE [SysDeskAI];
 GO
 

@@ -1,6 +1,4 @@
 /* =========================================================================
-   PROYECTO: SysDesk AI (Microsoft DP-800)
-   SCRIPT: ai/10_rag_copilot_solution.sql
    DESCRIPCIÓN: Implementación del Bloque G — Solución RAG en SQL Server 2025:
                 1. Retrieval: Vectorización del ticket y extracción de contexto
                    de dbo.kb_articulos en formato JSON (FOR JSON PATH).

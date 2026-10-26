@@ -1,8 +1,9 @@
 /* =========================================================================
-   PROYECTO: SysDesk AI (Microsoft DP-800)
-   SCRIPT: tests/test_bloque_c_y_d.sql
-   DESCRIPCIÓN: Batería de pruebas de validación empírica para capturas de 
-                pantalla del Bloque C (Seguridad) y Bloque D (Optimización).
+   DESCRIPCIÓN: Validación empírica de seguridad y control de acceso (Bloque C):
+                1. Verificación de visibilidad total y permiso UNMASK para rol Admin/Supervisor.
+                2. Comprobación de Dynamic Data Masking (DDM) en correos e IPs para rol Técnico.
+                3. Evaluación de Row-Level Security (RLS) en lectura (Filter Predicate) por departamento.
+                4. Prueba de infracción y captura de error ante inserción no autorizada (Block Predicate).
    ========================================================================= */
 USE [SysDeskAI];
 GO

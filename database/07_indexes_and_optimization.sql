@@ -1,6 +1,4 @@
 /* =========================================================================
-   PROYECTO: SysDesk AI (Microsoft DP-800)
-   SCRIPT: 07_indexes_and_optimization.sql
    DESCRIPCIÓN: Implementación del Bloque D — Optimización de Consultas:
                 1. Generación de volumen de datos (2.000 tickets históricos)
                    para análisis realista de páginas de memoria y lecturas lógicas.

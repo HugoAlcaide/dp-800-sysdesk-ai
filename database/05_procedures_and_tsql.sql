@@ -1,3 +1,9 @@
+/* =========================================================================
+   DESCRIPCIÓN: Lógica transaccional y consultas analíticas avanzadas en T-SQL:
+                1. Procedimiento dbo.usp_ResolverTicketConKB con control transaccional (TRY/CATCH).
+                2. Consulta avanzada con CTE, Window Functions (AVG OVER, DENSE_RANK),
+                   extracción nativa JSON_VALUE y filtrado con expresiones regulares REGEXP_LIKE.
+   ========================================================================= */
 USE [SysDeskAI];
 GO
 

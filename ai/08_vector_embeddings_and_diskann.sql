@@ -1,6 +1,4 @@
 /* =========================================================================
-   PROYECTO: SysDesk AI (Microsoft DP-800)
-   SCRIPT: ai/08_vector_embeddings_and_diskann.sql
    DESCRIPCIÓN: Implementación del Bloque E — Vectores, Embeddings y DiskANN:
                 1. Configuración de modelo externo de embeddings (384 dimensiones).
                 2. Función generadora determinista de embeddings semánticos VECTOR(384)

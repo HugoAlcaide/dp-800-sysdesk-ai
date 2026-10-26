@@ -1,3 +1,10 @@
+/* =========================================================================
+   DESCRIPCIÓN: Carga inicial de datos maestros y transaccionales (DML Seed Data):
+                1. Población de usuarios corporativos (Admins, Técnicos Tier 1/2 y Usuarios).
+                2. Registro de sistemas críticos (SQL 2025, VPN FortiGate, AD, SAP, K8s, Workday).
+                3. Inserción de artículos técnicos de resolución en la Base de Conocimiento (KB).
+                4. Generación de tickets históricos y activos con telemetría en formato JSON.
+   ========================================================================= */
 USE [SysDeskAI];
 GO
 
