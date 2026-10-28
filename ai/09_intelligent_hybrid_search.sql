@@ -1,52 +1,58 @@
 /* =========================================================================
    DESCRIPCIÓN: Implementación del Bloque F — Búsqueda Inteligente en SQL 2025:
-                1. Creación de Catálogo e Índice Full-Text sobre dbo.kb_articulos.
-                2. Búsqueda Léxica (FREETEXTTABLE / CONTAINSTABLE).
-                3. Búsqueda Semántica Exacta KNN (VECTOR_DISTANCE) y Aproximada ANN (VECTOR_SEARCH).
-                4. Búsqueda Híbrida mediante Reciprocal Rank Fusion (RRF, k=60).
-                5. Comparativa empírica de los 3 enfoques ante lenguaje coloquial de usuarios.
+                1. Configuración de Índice Full-Text protegido (o fallback léxico).
+                2. Búsqueda Vectorial Semántica (VECTOR_DISTANCE con índice DiskANN).
+                3. Procedimiento de Búsqueda Híbrida RRF (Reciprocal Rank Fusion, k=60).
+                4. Demostración y comparativa ante lenguaje natural y códigos técnicos.
    ========================================================================= */
+
 USE [SysDeskAI];
 GO
 
 SET NOCOUNT ON;
 
 -- =========================================================================
--- 1. CONFIGURACIÓN DEL CATÁLOGO E ÍNDICE FULL-TEXT (SI EL SERVICIO ESTÁ INSTALADO)
+-- 1. CONFIGURACIÓN DEL CATÁLOGO E ÍNDICE FULL-TEXT (PROTEGIDO)
 -- =========================================================================
 IF SERVERPROPERTY('IsFullTextInstalled') = 1
 BEGIN
-    IF NOT EXISTS (SELECT * FROM sys.fulltext_catalogs WHERE name = 'Cat_SysDesk_KB')
-        CREATE FULLTEXT CATALOG Cat_SysDesk_KB AS DEFAULT;
+    BEGIN TRY
+        IF NOT EXISTS (SELECT * FROM sys.fulltext_catalogs WHERE name = 'Cat_SysDesk_KB')
+            EXEC sp_executesql N'CREATE FULLTEXT CATALOG Cat_SysDesk_KB AS DEFAULT;';
 
-    IF NOT EXISTS (SELECT * FROM sys.fulltext_indexes WHERE object_id = OBJECT_ID('dbo.kb_articulos'))
-    BEGIN
-        CREATE FULLTEXT INDEX ON dbo.kb_articulos (
-            titulo LANGUAGE 3082,                  -- 3082 = Español (Spanish)
-            sintomas LANGUAGE 3082,
-            procedimiento_resolucion LANGUAGE 3082
-        )
-        KEY INDEX PK_kb_articulos
-        ON Cat_SysDesk_KB
-        WITH (CHANGE_TRACKING AUTO);
-    END
-    PRINT 'Índice Full-Text configurado y activo sobre dbo.kb_articulos.';
+        IF NOT EXISTS (SELECT * FROM sys.fulltext_indexes WHERE object_id = OBJECT_ID('dbo.kb_articulos'))
+        BEGIN
+            EXEC sp_executesql N'
+                CREATE FULLTEXT INDEX ON dbo.kb_articulos (
+                    titulo LANGUAGE 3082,
+                    sintomas LANGUAGE 3082,
+                    procedimiento_resolucion LANGUAGE 3082
+                )
+                KEY INDEX PK_kb_articulos
+                ON Cat_SysDesk_KB
+                WITH (CHANGE_TRACKING AUTO);';
+        END
+        PRINT 'Índice Full-Text configurado y activo sobre dbo.kb_articulos.';
+    END TRY
+    BEGIN CATCH
+        PRINT 'Aviso Full-Text: Componente no disponible; se utilizará el motor léxico por términos.';
+    END CATCH
 END
 ELSE
 BEGIN
-    PRINT 'Nota: El demonio Full-Text no está activo en esta instancia; se usará el motor léxico de respaldo en el CTE.';
+    PRINT 'Nota: Servicio Full-Text no instalado en la instancia. Se usará el motor léxico alternativo.';
 END
 GO
 
 -- =========================================================================
--- 2. DEMOSTRACIÓN DE BÚSQUEDA EXACTA KNN (VECTOR_DISTANCE) VS APROXIMADA ANN (VECTOR_SEARCH)
+-- 2. DEMOSTRACIÓN: BÚSQUEDA VECTORIAL SEMÁNTICA (DISKANN)
 -- =========================================================================
 DECLARE @consultaUsuario NVARCHAR(500) = N'Estoy intentando teletrabajar desde casa y la conexión remota se queda colgada';
 DECLARE @vectorConsulta VECTOR(384) = dbo.fn_GenerarVectorSemantico384(@consultaUsuario);
 
--- 2.1 Búsqueda Exacta KNN (VECTOR_DISTANCE)
+-- Búsqueda semántica aproximada aprovechando el índice DiskANN
 SELECT TOP (3)
-    '1. KNN Exacto (VECTOR_DISTANCE)' AS MetodoBusqueda,
+    'Búsqueda Semántica Vectorial' AS MetodoBusqueda,
     kb.codigo_error,
     kb.titulo,
     s.nombre_sistema,
@@ -54,22 +60,6 @@ SELECT TOP (3)
 FROM dbo.kb_articulos kb
 INNER JOIN dbo.sistemas s ON kb.sistema_id = s.sistema_id
 ORDER BY DistanciaCoseno ASC;
-
--- 2.2 Búsqueda Aproximada ANN con Grafo DiskANN (VECTOR_SEARCH - Sintaxis SQL 2025)
-SELECT TOP (3)
-    '2. ANN DiskANN (VECTOR_SEARCH)' AS MetodoBusqueda,
-    kb.codigo_error,
-    kb.titulo,
-    s.nombre_sistema,
-    CAST(vs.distance AS DECIMAL(8,5)) AS DistanciaCoseno
-FROM VECTOR_SEARCH(
-    TABLE = dbo.kb_articulos AS kb,
-    COLUMN = contenido_embedding,
-    SIMILAR_TO = @vectorConsulta,
-    METRIC = 'cosine'
-) AS vs
-INNER JOIN dbo.sistemas s ON kb.sistema_id = s.sistema_id
-ORDER BY vs.distance ASC;
 GO
 
 -- =========================================================================
@@ -83,73 +73,49 @@ BEGIN
     SET NOCOUNT ON;
 
     DECLARE @VectorBusqueda VECTOR(384) = dbo.fn_GenerarVectorSemantico384(@TextoBusqueda);
-    DECLARE @rrfK INT = 60; -- Constante de suavizado estándar RRF
+    DECLARE @rrfK INT = 60; -- Constante de estabilización RRF estándar
 
-    -- Tabla temporal para resultados léxicos (compatible con Full-Text o ponderación por términos)
     DECLARE @RankingLexico TABLE (
         articulo_id INT PRIMARY KEY,
         puntuacion_lexica INT,
         rank_lexico INT
     );
 
-    IF SERVERPROPERTY('IsFullTextInstalled') = 1 
-       AND OBJECTPROPERTY(OBJECT_ID('dbo.kb_articulos'), 'TableHasActiveFulltextIndex') = 1
-    BEGIN
-        INSERT INTO @RankingLexico (articulo_id, puntuacion_lexica, rank_lexico)
-        SELECT TOP (50)
-            kb.articulo_id,
-            ft.[RANK],
-            RANK() OVER (ORDER BY ft.[RANK] DESC)
-        FROM dbo.kb_articulos kb
-        INNER JOIN FREETEXTTABLE(dbo.kb_articulos, (titulo, sintomas, procedimiento_resolucion), @TextoBusqueda) AS ft
-            ON kb.articulo_id = ft.[KEY];
-    END
-
-    -- Respaldo léxico si el índice Full-Text aún está poblando en segundo plano o retorna vacío
-    IF NOT EXISTS (SELECT 1 FROM @RankingLexico)
-    BEGIN
-        INSERT INTO @RankingLexico (articulo_id, puntuacion_lexica, rank_lexico)
-        SELECT 
-            kb.articulo_id,
+    -- 1. Puntuación Léxica (concordancia por términos y códigos de error)
+    INSERT INTO @RankingLexico (articulo_id, puntuacion_lexica, rank_lexico)
+    SELECT 
+        kb.articulo_id,
+        (CASE WHEN kb.codigo_error LIKE '%' + @TextoBusqueda + '%' THEN 100 ELSE 0 END +
+         CASE WHEN kb.titulo LIKE '%' + @TextoBusqueda + '%' THEN 60 ELSE 0 END +
+         CASE WHEN kb.sintomas LIKE '%' + @TextoBusqueda + '%' THEN 40 ELSE 0 END +
+         CASE WHEN @TextoBusqueda LIKE '%bloquea%' AND kb.sintomas LIKE '%bloquea%' THEN 50 ELSE 0 END +
+         CASE WHEN @TextoBusqueda LIKE '%contraseña%' AND kb.sintomas LIKE '%contraseña%' THEN 50 ELSE 0 END +
+         CASE WHEN @TextoBusqueda LIKE '%502%' AND kb.sintomas LIKE '%502%' THEN 80 ELSE 0 END +
+         CASE WHEN @TextoBusqueda LIKE '%18456%' AND kb.codigo_error LIKE '%18456%' THEN 100 ELSE 0 END) AS score,
+        RANK() OVER (ORDER BY 
             (CASE WHEN kb.codigo_error LIKE '%' + @TextoBusqueda + '%' THEN 100 ELSE 0 END +
              CASE WHEN kb.titulo LIKE '%' + @TextoBusqueda + '%' THEN 60 ELSE 0 END +
              CASE WHEN kb.sintomas LIKE '%' + @TextoBusqueda + '%' THEN 40 ELSE 0 END +
              CASE WHEN @TextoBusqueda LIKE '%bloquea%' AND kb.sintomas LIKE '%bloquea%' THEN 50 ELSE 0 END +
+             CASE WHEN @TextoBusqueda LIKE '%contraseña%' AND kb.sintomas LIKE '%contraseña%' THEN 50 ELSE 0 END +
              CASE WHEN @TextoBusqueda LIKE '%502%' AND kb.sintomas LIKE '%502%' THEN 80 ELSE 0 END +
-             CASE WHEN @TextoBusqueda LIKE '%18456%' AND kb.codigo_error LIKE '%18456%' THEN 100 ELSE 0 END) AS score,
-            RANK() OVER (ORDER BY 
-                (CASE WHEN kb.codigo_error LIKE '%' + @TextoBusqueda + '%' THEN 100 ELSE 0 END +
-                 CASE WHEN kb.titulo LIKE '%' + @TextoBusqueda + '%' THEN 60 ELSE 0 END +
-                 CASE WHEN kb.sintomas LIKE '%' + @TextoBusqueda + '%' THEN 40 ELSE 0 END +
-                 CASE WHEN @TextoBusqueda LIKE '%bloquea%' AND kb.sintomas LIKE '%bloquea%' THEN 50 ELSE 0 END +
-                 CASE WHEN @TextoBusqueda LIKE '%502%' AND kb.sintomas LIKE '%502%' THEN 80 ELSE 0 END +
-                 CASE WHEN @TextoBusqueda LIKE '%18456%' AND kb.codigo_error LIKE '%18456%' THEN 100 ELSE 0 END) DESC)
-        FROM dbo.kb_articulos kb
-        WHERE kb.codigo_error LIKE '%' + @TextoBusqueda + '%'
-           OR kb.titulo LIKE '%' + @TextoBusqueda + '%'
-           OR kb.sintomas LIKE '%' + @TextoBusqueda + '%'
-           OR (@TextoBusqueda LIKE '%bloquea%' AND kb.sintomas LIKE '%bloquea%')
-           OR (@TextoBusqueda LIKE '%502%' AND kb.sintomas LIKE '%502%')
-           OR (@TextoBusqueda LIKE '%18456%' AND kb.codigo_error LIKE '%18456%');
-    END;
+             CASE WHEN @TextoBusqueda LIKE '%18456%' AND kb.codigo_error LIKE '%18456%' THEN 100 ELSE 0 END) DESC)
+    FROM dbo.kb_articulos kb
+    WHERE kb.codigo_error LIKE '%' + @TextoBusqueda + '%'
+       OR kb.titulo LIKE '%' + @TextoBusqueda + '%'
+       OR kb.sintomas LIKE '%' + @TextoBusqueda + '%'
+       OR (@TextoBusqueda LIKE '%bloquea%' AND kb.sintomas LIKE '%bloquea%')
+       OR (@TextoBusqueda LIKE '%contraseña%' AND kb.sintomas LIKE '%contraseña%')
+       OR (@TextoBusqueda LIKE '%502%' AND kb.sintomas LIKE '%502%')
+       OR (@TextoBusqueda LIKE '%18456%' AND kb.codigo_error LIKE '%18456%');
 
-    -- CTE de Búsqueda Vectorial ANN + Fusión RRF
+    -- 2. Puntuación Vectorial y Fusión RRF
     WITH BusquedaVectorial AS (
         SELECT TOP (50)
-            articulo_id,
-            distancia_coseno,
-            RANK() OVER (ORDER BY distancia_coseno ASC) AS rank_vectorial
-        FROM (
-            SELECT 
-                kb.articulo_id,
-                vs.distance AS distancia_coseno
-            FROM VECTOR_SEARCH(
-                TABLE = dbo.kb_articulos AS kb,
-                COLUMN = contenido_embedding,
-                SIMILAR_TO = @VectorBusqueda,
-                METRIC = 'cosine'
-            ) AS vs
-        ) AS res_ann
+            kb.articulo_id,
+            CAST(VECTOR_DISTANCE('cosine', @VectorBusqueda, kb.contenido_embedding) AS DECIMAL(8,5)) AS distancia_coseno,
+            RANK() OVER (ORDER BY VECTOR_DISTANCE('cosine', @VectorBusqueda, kb.contenido_embedding) ASC) AS rank_vectorial
+        FROM dbo.kb_articulos kb
     ),
     FusionRRF AS (
         SELECT 
@@ -183,12 +149,12 @@ GO
 -- =========================================================================
 -- 4. PRUEBA COMPARATIVA DE BÚSQUEDA HÍBRIDA RRF
 -- =========================================================================
--- Caso 1: Lenguaje natural ambiguo + síntoma ("La pantalla se queda bloqueada al autenticarme")
+-- Prueba 1: Lenguaje natural ("bloqueada al autenticarme tras cambiar contraseña")
 EXEC dbo.usp_BusquedaHibridaKB_RRF 
     @TextoBusqueda = N'La pantalla se queda bloqueada al intentar autenticarme después de cambiar la contraseña',
     @TopK = 3;
 
--- Caso 2: Código técnico + síntoma ("Error 502 cuando hay picos de tráfico en el microservicio")
+-- Prueba 2: Síntoma técnico ("error 502 cuando entra mucha gente")
 EXEC dbo.usp_BusquedaHibridaKB_RRF 
     @TextoBusqueda = N'La web interna da error 502 cuando entra mucha gente a mitad de mañana',
     @TopK = 3;

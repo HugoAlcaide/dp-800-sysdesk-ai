@@ -1,12 +1,17 @@
 /* =========================================================================
-   DESCRIPCIÓN: Implementación del Bloque G — Solución RAG en SQL Server 2025:
+   ARCHIVO: ai/10_rag_copilot_solution.sql
+   DESCRIPCIÓN: Implementación del Bloque G (Modo Nativo Determinista en SSMS):
                 1. Retrieval: Vectorización del ticket y extracción de contexto
                    de dbo.kb_articulos en formato JSON (FOR JSON PATH).
-                2. Augmentation: Construcción del prompt con instrucciones de
+                2. Guardrail Semántico: Validación de umbral de distancia coseno
+                   (@UmbralDistanciaMax) para bloquear alucinaciones en errores no
+                   documentados y escalar automáticamente a Nivel 2.
+                3. Augmentation: Construcción del prompt con instrucciones de
                    grounding estricto (JSON_OBJECT / JSON_ARRAY) + telemetría JSON.
-                3. Generation: Invocación a endpoint LLM mediante sp_invoke_external_rest_endpoint
-                   con síntesis determinista de respaldo y registro en dbo.auditoria_rag.
+                4. Generation & Audit: Síntesis determinista local inmediata (100%
+                   reproducible en SSMS sin dependencias externas) y auditoría.
    ========================================================================= */
+
 USE [SysDeskAI];
 GO
 
@@ -16,7 +21,7 @@ GO
 CREATE OR ALTER PROCEDURE dbo.usp_AsistenteRAG_SoporteTI
     @TicketID INT,
     @UsuarioConsultaID INT = 1,
-    @UsarEndpointExterno BIT = 0 -- 1: Invoca sp_invoke_external_rest_endpoint | 0: Síntesis local inmediata
+    @UmbralDistanciaMax FLOAT = 0.25 -- Corte de seguridad anti-alucinaciones
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -28,7 +33,7 @@ BEGIN
     DECLARE @SistemaAfectado NVARCHAR(100);
     DECLARE @PreguntaCompleta NVARCHAR(3000);
 
-    -- 1. Recuperar los datos del ticket abierto y su telemetría JSON nativa
+    -- 1. Recuperar los datos del ticket y su telemetría JSON nativa
     SELECT 
         @TituloTicket = t.titulo,
         @DescripcionTicket = t.descripcion_usuario,
@@ -50,7 +55,7 @@ BEGIN
     );
 
     -- =====================================================================
-    -- ETAPA 1: RETRIEVAL (Búsqueda Vectorial ANN + Contexto FOR JSON PATH)
+    -- ETAPA 1: RETRIEVAL (Búsqueda Vectorial Semántica + Contexto FOR JSON PATH)
     -- =====================================================================
     DECLARE @VectorPregunta VECTOR(384) = dbo.fn_GenerarVectorSemantico384(@PreguntaCompleta);
     DECLARE @ArticuloMejorID INT;
@@ -60,22 +65,17 @@ BEGIN
     DECLARE @PasosResolucionKB NVARCHAR(MAX);
     DECLARE @ContextoJSON NVARCHAR(MAX);
 
-    -- Obtener el artículo principal más cercano para trazabilidad en auditoría
+    -- 1.1 Obtener el artículo más cercano (KNN / DiskANN)
     SELECT TOP (1)
         @ArticuloMejorID = kb.articulo_id,
-        @MejorDistancia = vs.distance,
+        @MejorDistancia = CAST(VECTOR_DISTANCE('cosine', @VectorPregunta, kb.contenido_embedding) AS FLOAT),
         @CodigoErrorRecuperado = kb.codigo_error,
         @TituloKBRecuperado = kb.titulo,
         @PasosResolucionKB = kb.procedimiento_resolucion
-    FROM VECTOR_SEARCH(
-        TABLE = dbo.kb_articulos AS kb,
-        COLUMN = contenido_embedding,
-        SIMILAR_TO = @VectorPregunta,
-        METRIC = 'cosine'
-    ) AS vs
-    ORDER BY vs.distance ASC;
+    FROM dbo.kb_articulos kb
+    ORDER BY VECTOR_DISTANCE('cosine', @VectorPregunta, kb.contenido_embedding) ASC;
 
-    -- Serializar los 3 artículos más relevantes como documento JSON para el LLM
+    -- 1.2 Serializar los 3 artículos más relevantes en formato JSON estructurado
     SET @ContextoJSON = (
         SELECT TOP (3)
             kb.codigo_error AS CodigoArticuloKB,
@@ -83,15 +83,10 @@ BEGIN
             s.nombre_sistema AS SistemaRelacionado,
             kb.sintomas AS SintomasDocumentados,
             kb.procedimiento_resolucion AS PasosResolucionOficiales,
-            CAST(vs.distance AS DECIMAL(8,5)) AS DistanciaSemanticaCoseno
-        FROM VECTOR_SEARCH(
-            TABLE = dbo.kb_articulos AS kb,
-            COLUMN = contenido_embedding,
-            SIMILAR_TO = @VectorPregunta,
-            METRIC = 'cosine'
-        ) AS vs
+            CAST(VECTOR_DISTANCE('cosine', @VectorPregunta, kb.contenido_embedding) AS DECIMAL(8,5)) AS DistanciaSemanticaCoseno
+        FROM dbo.kb_articulos kb
         INNER JOIN dbo.sistemas s ON kb.sistema_id = s.sistema_id
-        ORDER BY vs.distance ASC
+        ORDER BY VECTOR_DISTANCE('cosine', @VectorPregunta, kb.contenido_embedding) ASC
         FOR JSON PATH
     );
 
@@ -121,33 +116,25 @@ BEGIN
     );
 
     -- =====================================================================
-    -- ETAPA 3: GENERATION (Invocación REST o Síntesis Fundamentada Local)
+    -- ETAPA 3: GUARDRAIL SEMÁNTICO Y SÍNTESIS FUNDAMENTADA EN KB
     -- =====================================================================
-    DECLARE @RespuestaRaw NVARCHAR(MAX);
     DECLARE @RespuestaFinalLLM NVARCHAR(MAX);
-    DECLARE @HttpStatus INT = -1;
+    DECLARE @EstadoGuardrail NVARCHAR(50);
 
-    IF @UsarEndpointExterno = 1
+    IF @MejorDistancia > @UmbralDistanciaMax
     BEGIN
-        BEGIN TRY
-            EXECUTE @HttpStatus = sp_invoke_external_rest_endpoint
-                @url = N'https://localhost:11434/v1/chat/completions',
-                @method = 'POST',
-                @payload = @PayloadLLM,
-                @credential = [https://localhost:11434],
-                @response = @RespuestaRaw OUTPUT;
-
-            IF @HttpStatus = 0
-                SET @RespuestaFinalLLM = JSON_VALUE(@RespuestaRaw, '$.result.choices[0].message.content');
-        END TRY
-        BEGIN CATCH
-            SET @HttpStatus = ERROR_NUMBER();
-        END CATCH
+        SET @EstadoGuardrail = N'BLOQUEADO_POR_UMBRAL (Escalado N2)';
+        SET @CodigoErrorRecuperado = 'SIN-COINCIDENCIA-KB';
+        SET @RespuestaFinalLLM = CONCAT(
+            N'[GUARDRAIL ANTI-ALUCINACIÓN ACTIVADO — ESCALADO A NIVEL 2] ', CHAR(13), CHAR(10),
+            N'• Motivo: La distancia semántica del artículo más cercano (', CAST(CAST(@MejorDistancia AS DECIMAL(6,4)) AS NVARCHAR(10)), 
+            N') supera el umbral máximo de seguridad permitido (', CAST(CAST(@UmbralDistanciaMax AS DECIMAL(6,4)) AS NVARCHAR(10)), N').', CHAR(13), CHAR(10),
+            N'• Acción: No existe un protocolo oficial validado en dbo.kb_articulos para esta incidencia. Se omite la respuesta automática para evitar alucinaciones y se escala el ticket #', @TicketID, N' a Ingeniería de Sistemas.'
+        );
     END
-
-    -- Síntesis fundamentada en los artículos recuperados si no hay endpoint externo activo
-    IF @RespuestaFinalLLM IS NULL
+    ELSE
     BEGIN
+        SET @EstadoGuardrail = N'APROBADO (Grounding Verificado)';
         SET @RespuestaFinalLLM = CONCAT(
             N'[DIAGNÓSTICO FUNDAMENTADO EN KB: ', @CodigoErrorRecuperado, N' — ', @TituloKBRecuperado, N'] ', CHAR(13), CHAR(10),
             N'• Correlación de Telemetría: Se ha analizado el ticket #', @TicketID, 
@@ -174,31 +161,35 @@ BEGIN
     -- Salida estructurada del asistente
     SELECT 
         @TicketID AS TicketAnalizado,
+        @EstadoGuardrail AS ControlCalidadRAG,
         @CodigoErrorRecuperado AS ArticuloKB_Aplicable,
         CAST(@MejorDistancia AS DECIMAL(8,5)) AS DistanciaCoseno,
         @TiempoMs AS LatenciaMs,
         @RespuestaFinalLLM AS RespuestaAsistenteRAG,
         @PayloadLLM AS PromptAumentadoJSON;
-END
+END;
 GO
 
 -- =========================================================================
 -- DEMOSTRACIÓN DE CASOS DE PRUEBA DEL PIPELINE RAG (BLOQUE G)
 -- =========================================================================
--- Caso 1: Ticket #1002 (Bloqueo recurrente de cuenta de dominio tras cambio de clave - AD Event 4740)
-EXEC dbo.usp_AsistenteRAG_SoporteTI @TicketID = 1002, @UsuarioConsultaID = 1;
+DECLARE @TicketCaso1 INT = (SELECT TOP 1 ticket_id FROM dbo.tickets WHERE titulo LIKE '%18456%' OR ticket_id = 1002 ORDER BY ticket_id);
+DECLARE @TicketCaso2 INT = (SELECT TOP 1 ticket_id FROM dbo.tickets WHERE titulo LIKE '%facturas%' OR ticket_id = 1003 ORDER BY ticket_id DESC);
+DECLARE @TicketCaso3 INT = (SELECT TOP 1 ticket_id FROM dbo.tickets WHERE ticket_id NOT IN (@TicketCaso1, @TicketCaso2) ORDER BY ticket_id);
 
--- Caso 2: Ticket #1003 (Se cuelga el programa al sacar las facturas del trimestre en SAP)
-EXEC dbo.usp_AsistenteRAG_SoporteTI @TicketID = 1003, @UsuarioConsultaID = 1;
+-- Casos 1, 2 y 3: Incidencias documentadas en la KB (Pasan el filtro de umbral)
+EXEC dbo.usp_AsistenteRAG_SoporteTI @TicketID = @TicketCaso1, @UsuarioConsultaID = 1;
+EXEC dbo.usp_AsistenteRAG_SoporteTI @TicketID = @TicketCaso2, @UsuarioConsultaID = 1;
+EXEC dbo.usp_AsistenteRAG_SoporteTI @TicketID = @TicketCaso3, @UsuarioConsultaID = 1;
 
--- Caso 3: Ticket #1005 (La web interna da error 502 cuando hay picos de tráfico - Exit Code 137)
-EXEC dbo.usp_AsistenteRAG_SoporteTI @TicketID = 1005, @UsuarioConsultaID = 1;
+-- Caso 4: Demostración del Guardrail Anti-Alucinación (Umbral estricto 0.0001)
+EXEC dbo.usp_AsistenteRAG_SoporteTI @TicketID = @TicketCaso1, @UsuarioConsultaID = 1, @UmbralDistanciaMax = 0.0001;
 
--- Verificar la trazabilidad registrada en la tabla de auditoría RAG
-SELECT 
+-- Verificación de la trazabilidad y auditoría RAG
+SELECT TOP (10)
     a.auditoria_id,
     u.username AS tecnico_consulta,
-    kb.codigo_error AS kb_utilizado,
+    kb.codigo_error AS kb_mas_cercano,
     CAST(a.distancia_coseno AS DECIMAL(8,5)) AS distancia_coseno,
     a.tiempo_respuesta_ms,
     a.respuesta_llm

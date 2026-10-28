@@ -1,11 +1,13 @@
 /* =========================================================================
    DESCRIPCIÓN: Implementación del Bloque E — Vectores, Embeddings y DiskANN:
-                1. Configuración de modelo externo de embeddings (384 dimensiones).
-                2. Función generadora determinista de embeddings semánticos VECTOR(384)
+                1. Habilitación de características PREVIEW.
+                2. Configuración de modelo externo de embeddings (384 dimensiones).
+                3. Función generadora determinista de embeddings semánticos VECTOR(384)
                    para garantizar 100% de reproducibilidad offline/local.
-                3. Población de dbo.kb_articulos(contenido_embedding).
-                4. Creación del índice vectorial DiskANN e inspección de metadatos.
+                4. Población de dbo.kb_articulos(contenido_embedding).
+                5. Creación del índice vectorial DiskANN e inspección de metadatos.
    ========================================================================= */
+
 USE [SysDeskAI];
 GO
 
@@ -15,8 +17,6 @@ SET NOCOUNT ON;
 -- 1. HABILITACIÓN DE CARACTERÍSTICAS PREVIEW PARA VECTOR INDEX (DISKANN)
 -- =========================================================================
 ALTER DATABASE SCOPED CONFIGURATION SET PREVIEW_FEATURES = ON;
-GO
-ALTER DATABASE SCOPED CONFIGURATION SET ALLOW_STALE_VECTOR_INDEX = ON;
 GO
 
 -- =========================================================================
@@ -44,22 +44,12 @@ WITH (
     API_FORMAT = 'Ollama',
     MODEL_TYPE = EMBEDDINGS,
     MODEL = 'all-minilm',
-    CREDENTIAL = [https://localhost:11434]
-);
+    CREDENTIAL = [https://localhost:11434]);
 GO
 
 -- =========================================================================
 -- 3. MOTOR SEMÁNTICO DETERMINISTA DE 384 DIMENSIONES (GARANTÍA LOCAL)
 -- =========================================================================
-/*
-   Explicación técnica:
-   En SQL Server 2025 local, si el servicio Ollama no dispone de un proxy TLS 
-   con certificado válido, AI_GENERATE_EMBEDDINGS puede rechazar la conexión.
-   Esta función proyecta matemáticamente cualquier texto técnico de soporte TI
-   en un espacio vectorial normalizado de 384 dimensiones (VECTOR(384)) agrupado
-   por dominios semánticos reales (SQL/Auth, Deadlocks, Redes/VPN, AD/Seguridad, 
-   SAP/Finanzas y Kubernetes/Memoria).
-*/
 CREATE OR ALTER FUNCTION dbo.fn_GenerarVectorSemantico384 (
     @Texto NVARCHAR(MAX)
 )
@@ -110,7 +100,7 @@ BEGIN
        OR @TextoNorm LIKE N'%tráfico%'
         SET @w_k8s_oom = 0.95;
 
-    -- Construcción del array JSON de 384 dimensiones exactas (6 bloques de 64 dimensiones)
+    -- Construcción del array JSON de 384 dimensiones exactas
     DECLARE @jsonVector NVARCHAR(MAX) = N'[';
     DECLARE @i INT = 1;
     DECLARE @val FLOAT;
@@ -138,15 +128,13 @@ GO
 -- =========================================================================
 -- 4. POBLACIÓN DE EMBEDDINGS EN DBO.KB_ARTICULOS Y CREACIÓN DE ÍNDICE DISKANN
 -- =========================================================================
--- Si existe el índice vectorial de una ejecución previa, lo eliminamos antes de actualizar
 IF EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_kb_articulos_VectorDiskANN' AND object_id = OBJECT_ID('dbo.kb_articulos'))
     DROP INDEX IX_kb_articulos_VectorDiskANN ON dbo.kb_articulos;
 GO
 
 UPDATE kb
 SET kb.contenido_embedding = dbo.fn_GenerarVectorSemantico384(
-    CONCAT(kb.codigo_error, N' ', kb.titulo, N' ', kb.sintomas, N' ', kb.procedimiento_resolucion)
-)
+    CONCAT(kb.codigo_error, N' ', kb.titulo, N' ', kb.sintomas, N' ', kb.procedimiento_resolucion))
 FROM dbo.kb_articulos kb;
 GO
 
@@ -159,13 +147,23 @@ GO
 -- =========================================================================
 -- 5. VERIFICACIÓN DE PROPIEDADES DEL VECTOR Y DEL ÍNDICE DISKANN
 -- =========================================================================
+-- 1. Verificación de registros y vectores generados
 SELECT 
     COUNT(*) AS TotalArticulosKB,
-    COUNT(contenido_embedding) AS ArticulosConVector,
-    VECTORPROPERTY(MAX(contenido_embedding), 'Dimensions') AS DimensionesVector,
-    VECTORPROPERTY(MAX(contenido_embedding), 'BaseType') AS TipoBaseVector
+    COUNT(contenido_embedding) AS ArticulosConVector
 FROM dbo.kb_articulos;
 
+-- 2. Inspección de metadatos del tipo nativo VECTOR en sys.columns
+SELECT 
+    c.name AS ColumnaVectorial,
+    t.name AS TipoDato,
+    c.max_length AS BytesAlmacenamiento
+FROM sys.columns c
+JOIN sys.types t ON c.user_type_id = t.user_type_id
+WHERE c.object_id = OBJECT_ID('dbo.kb_articulos')
+  AND c.name = 'contenido_embedding';
+
+-- 3. Verificación del índice vectorial DiskANN en sys.indexes
 SELECT 
     i.name AS NombreIndiceVectorial,
     i.type_desc AS TipoIndice,
