@@ -5,7 +5,7 @@
 ![Nivel Proyecto](https://img.shields.io/badge/Nivel%20de%20Complejidad-Nivel%203%20(Avanzado)-2EA44F?style=for-the-badge)
 ![AI Ready](https://img.shields.io/badge/AI-Vector%20384d%20%7C%20DiskANN%20%7C%20RAG-8A2BE2?style=for-the-badge)
 
-> **Nivel seleccionado del proyecto:** **Nivel 3 — Avanzado** (Diseño Relacional 3FN + T-SQL Avanzado + Seguridad DDM/RLS + Optimización de Índices + Vector Search `DiskANN` + Búsqueda Híbrida `RRF` + Solución `RAG` Autocontenida).
+> **Nivel seleccionado del proyecto:** **Nivel 3 — Avanzado** (Diseño Relacional 3FN + T-SQL Avanzado + Seguridad DDM/RLS + Optimización de Índices + Vector Search `DiskANN` + Búsqueda Híbrida `RRF` + Arquitectura `RAG Dual` con Guardrails Semánticos e Inferencia Local en Vivo con Ollama).
 
 ---
 
@@ -17,7 +17,7 @@ En los centros de soporte técnico empresarial (IT HelpDesk / ITSM), los ingenie
 1. **Gestión Operativa y Telemetría JSON:** Control transaccional de tickets, cálculo automático de acuerdos de nivel de servicio (SLA) y almacenamiento de telemetría de diagnóstico mediante el nuevo tipo de datos nativo **`JSON`**.
 2. **Gobierno del Dato y Seguridad Zero-Trust:** Enmascaramiento dinámico (**DDM**) de direcciones IP de servidores y correos corporativos, junto con aislamiento multidepartamental estricto fila a fila mediante **Row-Level Security (RLS)**.
 3. **Búsqueda Híbrida Inteligente (RRF):** Fusión de búsqueda léxica (**Full-Text BM25**) y búsqueda semántica aproximada sobre grafos **DiskANN** (**`VECTOR(384)`**) mediante el algoritmo **Reciprocal Rank Fusion**.
-4. **Asistente Copilot RAG en T-SQL:** Procedimiento almacenado que recupera los artículos de conocimiento más relevantes, construye un prompt aumentado con reglas de *grounding* (`JSON_OBJECT` / `JSON_ARRAY`), sintetiza la solución técnica y audita cada inferencia en milisegundos.
+4. **Asistente Copilot RAG Dual con Guardrail Semántico:** Arquitectura flexible que opera tanto en modo determinista autónomo (`10_rag_copilot_solution.sql`) como conectada en tiempo real mediante REST (`sp_invoke_external_rest_endpoint`) a un modelo local **Llama 3.2 en Ollama** (`11_rag_ollama_live_endpoint.sql`), incorporando un corte de seguridad matemático (`@UmbralDistanciaMax = 0.25`) que bloquea alucinaciones en 11 ms ante errores no catalogados.
 
 ---
 
@@ -48,16 +48,24 @@ En los centros de soporte técnico empresarial (IT HelpDesk / ITSM), los ingenie
 |  |     Optimización I/O      |               |     Motor Nativo de IA        |  |
 |  | - Covering Filtered Index |               | - Tipo nativo VECTOR(384)     |  |
 |  | - Eliminación Key Lookups |               | - Índice Vectorial DiskANN    |  |
-|  | - Reducción 95% Lecturas  |               | - Hybrid Search (BM25 + RRF)  |  |
+|  | - Reducción 98% Lecturas  |               | - Hybrid Search (BM25 + RRF)  |  |
 |  +---------------------------+               | - Pipeline RAG + Auditoría    |  |
 |                                              +---------------+---------------+  |
 +--------------------------------------------------------------|------------------+
                                                                |
-                                                               v
-                                       +---------------------------------------+
-                                       |  Modelo Local Embeddings / Inferencia |
-                                       |   (Ollama / ONNX / Motor Semántico)   |
-                                       +---------------------------------------+
+                                   +---------------------------+---------------------------+
+                                   | (Inferencia REST / Live)                              | (Modo Autónomo Local)
+                                   v                                                       v
+                       +-----------------------+                               +-----------------------+
+                       |   Cloudflare Tunnel   |                               |  Motor de Síntesis    |
+                       |  (--http-host-header) |                               |  Determinista T-SQL   |
+                       +-----------+-----------+                               +-----------------------+
+                                   |
+                                   v
+                       +-----------------------+
+                       |     Ollama Server     |
+                       | (Llama 3.2 3B Local)  |
+                       +-----------------------+
 ```
 
 ---
@@ -68,7 +76,7 @@ En los centros de soporte técnico empresarial (IT HelpDesk / ITSM), los ingenie
 * **Lenguaje:** Transact-SQL (T-SQL) avanzado.
 * **Capacidades Nativas SQL 2025:** Tipos de datos `VECTOR(384)` y `JSON`, índice vectorial `DISKANN`, funciones `VECTOR_DISTANCE`, `VECTOR_SEARCH`, `VECTORPROPERTY`, `REGEXP_LIKE`, `JSON_OBJECT`, `JSON_ARRAY` y `sp_invoke_external_rest_endpoint`.
 * **Entorno y Control de Versiones:** SQL Server Management Studio (SSMS 22), Git y GitHub.
-* **Modelos e Integración IA:** Soporte para `EXTERNAL MODEL` con `Ollama` (`all-minilm` 384d / `llama3.2`) y motor semántico determinista local para ejecución 100 % reproducible sin dependencias externas.
+* **Modelos e Integración IA:** Soporte para `EXTERNAL MODEL` con `Ollama` (`all-minilm` 384d / `llama3.2` 3B local), Cloudflare Quick Tunnels (`cloudflared`) y motor semántico determinista local para ejecución 100 % reproducible.
 
 ---
 
@@ -91,17 +99,25 @@ dp-800-sysdesk-ai/
 ├── ai/                                                # Bloques E, F y G (Inteligencia Artificial Nativa)
 │   ├── 08_vector_embeddings_and_diskann.sql           # EXTERNAL MODEL, Embeddings 384d e Índice DiskANN
 │   ├── 09_intelligent_hybrid_search.sql               # Full-Text, KNN, ANN y Fusión Híbrida RRF
-│   └── 10_rag_copilot_solution.sql                    # Procedimiento RAG completo y auditoría de IA
+│   ├── 10_rag_copilot_solution.sql                    # Procedimiento RAG determinista y auditoría de IA
+│   └── 11_rag_ollama_live_endpoint.sql                # Procedimiento RAG en vivo con Ollama y Guardrail
 │
 ├── tests/                                             # Batería de validación empírica
 │   └── security_and_performance_validation.sql        # Pruebas multiusuario de RLS, DDM y bloqueos
 │
 ├── docs/                                              # Documentación técnica y evidencias
+│   ├── arquitecura.png                                # Diagrama de arquitectura y flujo (Database-Centric AI)
 │   ├── proyecto.md                                    # Memoria técnica completa (Fuente del PDF)
-│   ├── SysDesk_AI_Propuesta_Tecnica_DP800.pdf         # Entregable oficial en formato PDF
+│   ├── proyecto.pdf                                   # Entregable oficial en formato PDF
 │   ├── ai_assisted_sql_audit.md                       # Auditoría del Bloque B (Desarrollo SQL con IA)
 │   ├── architecture_and_deployment.md                 # Guía técnica detallada de despliegue
 │   └── img/                                           # Capturas de ejecución y planes de consulta
+│       ├── 01_tsql_json_regex_window.png
+│       ├── 02_security_rls_ddm.png
+│       ├── 03_query_optimization_plan.png
+│       ├── 04_hybrid_search_rrf.png
+│       ├── 05_rag_copilot_execution.png
+│       └── 06_rag_guardrail_ollama_block.png
 │
 └── presentation/                                      # Material de defensa del proyecto
     └── dp800-project.pptx                             # Presentación ejecutiva (8 diapositivas)
@@ -135,21 +151,35 @@ El esquema está normalizado en **Tercera Forma Normal (3FN)** y consta de 5 tab
 ✔ Optimización empírica: Paso de Clustered Index Scan a Index Seek mediante Índice Cubriente Filtrado (Bloque D)
 ✔ Creación de EXTERNAL MODEL, generación de embeddings de 384 dimensiones e índice DiskANN (Bloque E)
 ✔ Búsqueda inteligente: Comparativa Full-Text (BM25) vs Vectorial (KNN/ANN) vs Híbrida con RRF (Bloque F)
-✔ Arquitectura RAG end-to-end en T-SQL con grounding estricto y trazabilidad en tabla de auditoría (Bloque G)
+✔ Arquitectura RAG Dual: Modo autónomo local y modo Live REST con Ollama Llama 3.2 (Bloque G)
+✔ Guardrail Semántico Anti-Alucinaciones en T-SQL con mitigación de riesgos y escalado a Nivel 2 (Bloque G)
 ```
 
 ---
 
 ## 7. Guía Rápida de Instalación y Reproducción
 
-El proyecto es **100 % autocontenido y reproducible en local**. No requiere claves privadas de API ni configuraciones externas para ejecutar todas las pruebas:
+El proyecto ofrece dos modalidades de ejecución: **100 % offline y autocontenido** (Scripts 01 al 10) o **inferencia generativa en tiempo real con Ollama** (Script 11).
 
+### Modalidad A: Ejecución Local Autónoma (Inmediata)
 1. Abrir **SQL Server Management Studio (SSMS 22)** conectado a una instancia de **SQL Server 2025**.
-2. Ejecutar en orden los scripts de la carpeta `database/` (`01` al `07`).
-3. Ejecutar en orden los scripts de la carpeta `ai/` (`08` al `10`).
-4. Ejecutar `tests/security_and_performance_validation.sql` para verificar el comportamiento de RLS y DDM bajo distintos usuarios (`halcaide` vs `lgomez`).
+2. Ejecutar en orden los scripts de la carpeta `database/` (`01_create_database.sql` al `07_indexes_and_optimization.sql`).
+3. Ejecutar en orden los scripts de la carpeta `ai/` (`08_vector_embeddings_and_diskann.sql` al `10_rag_copilot_solution.sql`).
+4. Ejecutar `tests/security_and_performance_validation.sql` para verificar RLS y DDM.
 
-*(Para más detalles sobre cada script, consultar [`docs/architecture_and_deployment.md`](docs/architecture_and_deployment.md)).*
+### Modalidad B: Inferencia en Vivo con Ollama (Llama 3.2 3B)
+1. En una terminal de PowerShell, iniciar Ollama permitiendo orígenes externos:
+   ```powershell
+   $env:OLLAMA_ORIGINS="*"
+   ollama serve
+   ```
+2. En una segunda terminal, exponer el túnel TLS reescribiendo la cabecera Host:
+   ```powershell
+   cloudflared tunnel --url http://localhost:11434 --http-host-header localhost
+   ```
+3. Abrir `ai/11_rag_ollama_live_endpoint.sql`, actualizar la variable `@MiTunelActivo` con la URL HTTPS generada y ejecutar los casos de prueba.
+
+*(Para más detalles sobre cada script y configuración avanzada, consultar [`docs/architecture_and_deployment.md`](docs/architecture_and_deployment.md)).*
 
 ---
 
@@ -180,6 +210,11 @@ En `ai/10_rag_copilot_solution.sql`, `dbo.usp_AsistenteRAG_SoporteTI` cruza la t
 
 ![Ejecución RAG Copilot](docs/img/05_rag_copilot_execution.png)
 
+### 8.6. Guardrail Semántico Anti-Alucinaciones en Vivo (Corte en 11 ms)
+Ejecución de `ai/11_rag_ollama_live_endpoint.sql` ante una incidencia de hardware no documentada en la KB (Ticket #3009). Al superar el umbral de distancia coseno (`0.36962 > 0.25`), SQL Server aborta la invocación HTTP a Ollama en **11 ms**, evitando alucinaciones y escalando el ticket a Nivel 2:
+
+![Bloqueo por Guardrail Semántico](docs/img/06_rag_guardrail_ollama_block.png)
+
 ---
 
 ## 9. Conclusiones
@@ -188,5 +223,7 @@ En `ai/10_rag_copilot_solution.sql`, `dbo.usp_AsistenteRAG_SoporteTI` cruza la t
 * **Qué problemas surgieron y cómo se resolvieron:**
   1. *Sintaxis actualizada de `VECTOR_SEARCH`:* Las versiones recientes del índice DiskANN no admiten el parámetro explícito `TOP_N` dentro de la función; se resolvió aplicando `SELECT TOP (k)` en la proyección exterior ordenada por `vs.distance ASC`.
   2. *Reproducibilidad offline de embeddings:* Dado que `AI_GENERATE_EMBEDDINGS` exige endpoints HTTPS con certificados TLS válidos, se diseñó en paralelo una función vectorizadora determinista de 384 dimensiones en T-SQL que garantiza que el índice DiskANN, las distancias coseno y el flujo RAG funcionen de inmediato en cualquier máquina local.
-  3. *Rendimiento en tablas pequeñas:* Con pocos registros el optimizador prefiere escaneos completos; se inyectó un lote histórico de 2.000 tickets para demostrar empíricamente el impacto real del índice cubriente filtrado en `STATISTICS IO`.
-* **Mejoras futuras:** Automatización del refresco de embeddings mediante un trigger asíncrono o cola de Service Broker cuando se publiquen nuevos artículos en `dbo.kb_articulos`, e integración de un frontal interactivo conectado directamente a `dbo.usp_AsistenteRAG_SoporteTI`.
+  3. *Rendimiento en tablas pequeñas:* Con pocos registros el optimizador prefiere escaneos completos; se inyectó un lote histórico de 2.000 tickets para demostrar empíricamente el impacto real del índice cubriente filtrado en `STATISTICS IO` (reducción de 157 a 3 lecturas lógicas).
+  4. *Protección contra DNS Rebinding en Ollama (Error HTTP 403):* Ollama rechaza llamadas externas que no provengan de `localhost`. Al conectar SQL Server mediante Cloudflare Tunnel, se solucionó ejecutando el túnel con el flag `--http-host-header localhost` y levantando el servicio con `$env:OLLAMA_ORIGINS="*"`.
+  5. *Ajuste de tiempo de espera en inferencia sobre CPU (Error 31629):* La generación local con Llama 3.2 sobre CPU tarda entre 32 y 38 segundos en responder. Se evitó el corte predeterminado de 30 segundos configurando explícitamente `@timeout = 120` en `sp_invoke_external_rest_endpoint`.
+* **Mejoras futuras:** Automatización del refresco de embeddings mediante un trigger asíncrono o cola de Service Broker cuando se publiquen nuevos artículos en `dbo.kb_articulos`, e integración de un frontal web interactivo conectado directamente a los procedimientos almacenados RAG.

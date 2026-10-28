@@ -132,6 +132,8 @@ WHERE estado IN ('Abierto', 'En Proceso');
    ![Búsqueda Híbrida RRF](img/04_hybrid_search_rrf.png)
 5. **Diagnóstico del Asistente Copilot RAG y Registro de Auditoría:**  
    ![Asistente RAG](img/05_rag_copilot_execution.png)
+6. **Evidencia del Guardrail Semántico Anti-Alucinaciones (Bloqueo de llamada a Ollama en 11 ms):**  
+   ![Guardrail Anti-Alucinaciones](img/06_rag_guardrail_ollama_block.png)
 
 ---
 
